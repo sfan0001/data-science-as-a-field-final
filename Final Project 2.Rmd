@@ -1,0 +1,199 @@
+---
+title: "Reproducible report on COVID-19 data analysis"
+author: 
+date: "2025-09-02"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+## 1. Project Overview
+This project analyzes trends in COVID-19-related deaths in New York and Kentucky using publicly available data. Its primary goal is to provide hands-on practice with data management and analysis, focusing on data cleaning, transformation, and visualization. The project will interpret how these death counts have evolved over time.
+
+## 2. Data Source
+This analysis utilizes publicly available COVID-19 data collected and maintained by the Johns Hopkins University Center for Systems Science and Engineering (CSSE). The dataset is accessible via the GitHub repository, with specific links provided in the data importing section below. Only the portion of the data pertaining to the United States was used for this project.
+
+## 3. Data management
+### 3.1. Importing data
+```{r, message=FALSE}
+# Import tidyverse library
+library(tidyverse)
+
+# Concatenate partial URL and file names to make a list of complete URLs
+url_in <- "https://raw.githubusercontent.com/CSSEGISandData/COVID-19/master/csse_covid_19_data/csse_covid_19_time_series/"
+
+file_names <- c("time_series_covid19_confirmed_US.csv",
+                "time_series_covid19_deaths_US.csv")
+urls <- str_c(url_in, file_names)
+
+# Read data into R
+us_cases = read_csv(urls[1])
+us_deaths = read_csv(urls[2])
+us_cases; us_deaths
+```
+
+The R output shows daily data stored across many columns. For easier analysis, we'll reshape this data into two new columns: date, cases/deaths.
+
+### 3.2. Tidying and transforming data
+* Transformed the "wider" US case and death files into "longer" files. 
+* Created columns for **date** and **cases** for the case data, and **date** and **deaths** for the death data. 
+* Set the **date** column as date object.
+* Removed the columns not needed for analysis. 
+* Combined the two files into a single **US** file.
+
+
+```{r, message=FALSE}
+# Tidying and transforming US cases file
+us_cases <- us_cases %>%
+            pivot_longer(cols = - (UID:Combined_Key),
+                         names_to = "date",
+                         values_to = "cases") %>%
+            select(Admin2 : cases) %>%
+            mutate(date = mdy(date)) %>%
+            select(-c(Lat, Long_))
+
+# Tidying and transforming US deaths file
+us_deaths <- us_deaths %>%
+            pivot_longer(cols = - (UID:Population),
+                         names_to = "date",
+                         values_to = "deaths") %>%
+            select(Admin2 : deaths) %>%
+            mutate(date = mdy(date)) %>%
+            select(-c(Lat, Long_))
+
+# Combining cases and deaths files
+US <- us_cases %>%  full_join(us_deaths)
+US
+```
+
+The R output shows that the "US" data contains 3,819,906 rows and 8 columns. The **date** variable/column is now in the **date** format. But there are some rows with 0 case, which may be not very useful.
+
+### 3.3. Data aggregation by states
+* Calculate the total nubmer of **cases**, **deaths** and **Population** by states.
+* Remove rows where either case count or population size is 0.
+* Create new columns for **cases_per_mill**, **deaths_per_mill**.
+* Remove unnecessary columns
+
+
+```{r}
+US_by_State <- US %>%
+               group_by(Province_State, Country_Region, date) %>%
+               summarize(cases = sum(cases),
+                         deaths = sum(deaths),
+                         Population = sum(Population)) %>%
+               filter(cases > 0, Population > 0) %>%
+               mutate(cases_per_mill = cases * 1000000 / Population,
+                      deaths_per_mill = deaths * 1000000 / Population) %>%
+               select(Province_State, Country_Region, date,
+                      cases, deaths, cases_per_mill, 
+                      deaths_per_mill, Population) %>%
+               ungroup()
+
+US_by_State
+```
+
+After aggregation, there are 61,039 rows and 8 columns. There are no more rows with 0 case.
+
+## 4. Analysis and visualization
+### 4.1. Compare the COVID-19 case trends in two states
+```{r}
+# Choose which two states to compare
+states_to_compare <- c("New York", "Kentucky")
+
+# Compare two states on the nubmer of cases weighted by population sizes
+US_by_State %>%
+    filter(Province_State %in% states_to_compare) %>%
+    ggplot(aes(x = date, y = cases_per_mill, color = Province_State)) +
+    geom_line() +
+    geom_point() +
+    scale_y_log10() +
+    theme(legend.position = "bottom",
+          axis.text.x = element_text(angle = 90)) +
+    labs(title = "COVID-19 Cases: New York vs. Kentucky",
+          y = "Cases per mill", color = "State")
+```
+
+
+To compare the two states with different population sizes, we calculated cases per million. The graph shows that New York experienced a rapid and steep initial increase in cases, with its curve quickly rising above Kentucky's. While Kentucky's curve also increased, it was at a slower rate. Over time, both states' cumulative case curves have flattened, indicating a slowdown in the rate of new infections. Since late 2020, the two states have maintained a relatively constant difference in their cumulative case counts per million.
+
+### 4.2 Compare the COVID-19-related death trends in two states
+```{r}
+US_by_State %>%
+    filter(Province_State %in% states_to_compare) %>%
+    filter(deaths > 0) %>%
+    ggplot(aes(x = date, y = deaths_per_mill, color = Province_State)) +
+    geom_line() +
+    geom_point() +
+    scale_y_log10() +
+    theme(legend.position = "bottom",
+          axis.text.x = element_text(angle = 90)) +
+    labs(title = "COVID-19 deaths: New York vs. Kentucky",
+          y = "Deaths per mill", color = "State")
+```
+
+
+Just like with the case counts, the trends for cumulative COVID-19 deaths per million in New York and Kentucky show a similar pattern. New York experienced a rapid and steep rise in deaths early in the pandemic, with its curve quickly rising far above Kentucky's. While Kentucky's death count also increased, it was at a much slower rate. Over time, both states saw their curves flatten out, indicating a slowdown in the rate of new deaths. However, a significant gap remains, with New York consistently having a substantially higher cumulative death count per million than Kentucky throughout the period shown, particularly before 2022.
+
+### 4.3. Modeling the trend of COVID-19-related deaths using a simple linear regression model
+```{r}
+# Filter the data for each state and fit a separate linear model
+mod_ny <- US_by_State %>%
+  filter(Province_State == "New York") %>%
+  lm(deaths_per_mill ~ cases_per_mill, data = .)
+summary(mod_ny)
+
+mod_ky <- US_by_State %>%
+  filter(Province_State == "Kentucky") %>%
+  lm(deaths_per_mill ~ cases_per_mill, data = .)
+summary(mod_ky)
+```
+
+
+The linear regression analysis shows a statistically significant relationship between COVID-19-related deaths and case counts in both New York and Kentucky. However, the adjusted R-squared values reveal a key difference: while 85.6% of the variation in death count is explained by case count in New York, that figure rises to 98.2% in Kentucky. This indicates that the simple linear regression model is a much better fit for the data from Kentucky.
+
+```{r}
+# Generate predictions for each state's data using its respective model
+US_by_State_w_pred <- US_by_State %>%
+  filter(Province_State %in% c("New York", "Kentucky")) %>%
+  filter(cases > 0, Population > 0) %>%
+  mutate(
+    # Create a new column 'pred' with predictions based on the state
+    pred = case_when(
+      Province_State == "New York" ~ predict(mod_ny, newdata = .),
+      Province_State == "Kentucky" ~ predict(mod_ky, newdata = .)
+    )
+  )
+
+
+US_by_State_w_pred %>%
+  ggplot(aes(x = cases_per_mill, color = Province_State)) +
+  geom_point(aes(y = deaths_per_mill), size = 0.5, alpha = 0.6) +
+  geom_point(aes(y = pred), shape = 1, size = 0.2, stroke = 0.3) +
+  labs(title = "Actual vs. Predicted Deaths Per Million",
+       subtitle = "Linear Models for New York and Kentucky",
+       x = "Cases per Million",
+       y = "Deaths per Million",
+       color = "State") +
+  theme_minimal()
+```
+
+
+In this figure, the curved lines represent the actual trends of COVID-19-related deaths per million as a function of cases per million, while the straight lines show the fit from the simple linear regression model.
+
+It's clear from the graph that the model provides a much better fit for Kentucky's data. The red straight line closely aligns with the actual data points. Conversely, the model is a poor fit for New York's data, as the blue curved line has a pronounced concave pattern. This indicates that the relationship between cases and deaths in New York is non-linear, and a quadratic regression model may be a more appropriate fit.
+
+## 5. Conclusion
+* Initial Trends: Both New York and Kentucky showed similar overall trends in cumulative COVID-19 cases and deaths per million, with a rapid initial increase followed by a flattening of the curves. New York consistently had a higher cumulative case and death count per million.
+
+* Linear Regression Model Fit: A statistically significant relationship between case and death counts exists in both states. However, the simple linear regression model is a much better fit for Kentucky's data (98.2% explained variation) than for New York's (85.6% explained variation).
+
+* Model Limitations: The poor fit of the simple linear regression model for New York's data, as evidenced by a concave pattern, suggests that the relationship between cases and deaths in that state is non-linear and may be better captured by a quadratic regression model.
+
+## 6. Possible biases
+
+* New York (Urban Density Bias): The early and rapid spread of the virus in New York City, a global epicenter with high population density and extensive public transit, likely led to a significant number of early cases and deaths going uncounted due to limited testing capacity.
+
+* Kentucky (Rural and Socioeconomic Bias): Kentucky, a more rural state, may have had different data biases. Due to less population density, the spread might have been slower, but access to testing and healthcare could have been a greater challenge in remote areas. Likely some cases and deaths were not counted.

@@ -1,0 +1,139 @@
+---
+title: "NYPD Shooting Incident Data Report"
+author: ""
+date: "2025-09-05"
+output:
+  pdf_document: default
+  word_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+## 1. Project Overview
+This project uses publicly available data to analyze trends in gun violence in New York City. The primary objective is to practice fundamental data management and analysis skills, including data cleaning, transformation, and visualization, while interpreting key changes in gun violence rates over time.
+
+## 2. Data Source
+The analysis uses NYPD shooting incident data that can be accessed from <https://data.cityofnewyork.us/api/views/833y-fsy8/rows.csv?accessType=DOWNLOAD>. 
+
+## 3. Data management
+### 3.1. Importing data
+```{r, message = FALSE}
+# Import tidyverse library and data into R
+library(tidyverse)
+url_of_shooting <- "https://data.cityofnewyork.us/api/views/833y-fsy8/rows.csv?accessType=DOWNLOAD"
+shooting <- read_csv(url_of_shooting)
+shooting
+```
+
+From the summarized infomation above, we can see the data is composed by 29744 rows and 21 columns. Each row represents an incident, having a unique ID, occuring date and time, location information, perpetrator and victim information, and statistical murder flag (whether or not the victim is dead).
+
+### 3.2. Checking missing values
+Let's see how many missing values there are for each variable.
+```{r}
+missing_values_summary <- shooting %>%
+  summarise(across(everything(), ~ sum(is.na(.))))
+
+print(missing_values_summary)
+```
+
+Several variables related with the locations of shooting incidents have large amount of missing values, as well as variables related with perpetrator age group, sex, and race. However, I would like to perform sevaral analysis, each with different subset of the original data. To fully utilize the available information, I would only remove the missing values in the specific subset of data before each analyses.
+
+### 3.3 Data cleaning and transformation
+* Selected 4 columns from original data: OCCUR_DATE, BORO, STATISTICAL_MURDER_FLAG, PERP_AGE_GROUP. 
+* Renamed STATISTICAL_MURDER_FLAG as "deaths"
+* Extracted a new feature (year) from OCCUR_DATE and discarded OCCUR_DATE.
+* Added a place holder column "Incidents" for future use. 
+* List category information for each remaining column.
+
+```{r}
+shooting1 <- shooting %>%
+          select(OCCUR_DATE, BORO, STATISTICAL_MURDER_FLAG, PERP_AGE_GROUP) %>%
+          rename(Deaths = STATISTICAL_MURDER_FLAG) %>%
+          mutate(date = mdy(OCCUR_DATE), Incidents = 1) %>%
+          mutate(Year = year(date))  %>%
+          select(-c(OCCUR_DATE,date))
+
+shooting1 %>% map(table)
+```
+
+From above, we see Brooklyn is the district with the most shooting incidents. We also see a lot of ambiguity and errors in the perpetrator age groups.
+
+## 4. Analysis and Visualization
+### 4.1. Modelling death count using the simple linear regression model
+```{r}
+shooting2 <- shooting1 %>%
+    select(Year, Incidents, Deaths, BORO) %>%
+    group_by(Year) %>%
+    summarise(Incidents = sum(Incidents),
+              Deaths = sum(Deaths))
+mod = lm(Deaths ~ Incidents, data = shooting2)
+summary(mod)
+
+shooting2_w_pred <- shooting2 %>% mutate(pred = predict(mod))
+shooting2_w_pred %>%
+    ggplot() +
+    geom_point(aes(x = Incidents, y = Deaths), color = "blue") +
+    geom_point(aes(x = Incidents, y = pred), color = "red")
+```
+
+As expected, both the simple linear regression output summary and the ggplot figure showed that the number of deaths could be well explained and predicted by the number of shooting incidents. However, the overall distribution has a slightly convex shape, which implies that other factors might also be influencing the number of deaths.
+
+### 4.2. Change of gun violence over years in different boroughs
+```{r}
+
+# The data is aggregated by two variables: Year and BORO.
+shooting1  %>%
+    group_by(Year, BORO) %>%
+    summarise(Incidents = sum(Incidents)) %>%
+    ggplot(aes(x = Year, y = Incidents, group = BORO, color = BORO)) +
+    geom_line() +
+    scale_x_continuous(breaks = unique(shooting1$Year)) +
+    theme(legend.position = "bottom",
+          axis.text.x = element_text(angle = 90, vjust = 0.5)) +
+    labs(title = "Plot of shooting incidents vs. year by borough")
+```
+
+From the figure, the largest number of shootings occurred in Brooklyn and the Bronx compared to the other boroughs. The number of shootings decreased from 2006 until 2019, then increased. Since 2021, the number of shootings in the Bronx has begun to reach the level of Brooklyn. What caused the number of shootings to decrease until 2019 and then rise is an interesting question to explore.
+
+### 4.3. Change of gun violence over years by different perpetrator age groups in Brooklyn
+
+Here, we zoom in on Brooklyn, to see the change of the number of shooting incidents over years by different perpetrator age groups.
+```{r}
+#The data is subset to only include shooting incidents 
+#in Brooklyn and with clear perptrator age groups
+#It is then aggregated by two variables: Year and PERP_AGE_GROUP.
+shooting1 %>%
+    filter(BORO == "BROOKLYN",PERP_AGE_GROUP %in% c("<18", "18-24", "25-44", "45-64", "65+")) %>%
+    group_by(Year, PERP_AGE_GROUP) %>%
+    summarise(Incidents = sum(Incidents)) %>%
+    ggplot(aes(x = Year, y = Incidents, group = PERP_AGE_GROUP, color = PERP_AGE_GROUP)) +
+    geom_line() +
+    scale_x_continuous(breaks = unique(shooting1$Year)) +
+    theme(legend.position = "bottom",
+          axis.text.x = element_text(angle = 90, vjust = 0.5)) +
+    labs(title = "Plot of shooting incidents vs. year by perp age group")
+```
+
+From the figure, we can observe that the number of shootings was lowest around 2018-2019, after which it began to rise again.
+The "18-24" and "25-44" age groups consistently account for the highest numbers of shootings. The "18-24" group committed more shootings until approximately 2015. Subsequently, the "25-44" age group became responsible for a greater number of incidents. It would be insightful to investigate the reasons behind this shift.
+
+## 5. Conclusion
+
+* The number of deaths was well predicted by the number of shooting incidents.
+* The number of shootings decreased from 2006 to 2019, then increased afterward.
+* More shooting incidents occurred in Brooklyn and the Bronx than in other boroughs.
+* Perpetrators in the "18-24" and "25-44" age groups were responsible for more shootings. Interestingly, before 2016, the "18-24" group committed more shootings than the "25-44" group; after 2016, the "25-44" group committed more.
+
+## 6. Possible Bias
+
+* The data does not include suicidal and accidental shootings, which makes it difficult to paint a full picture of gun violence.
+* The population size for each borough and age group is unknown. The conclusions would be more accurate if we could calculate standardized rates (e.g., incidents per 100,000 people) for each group.
+* I acknowledge that I have personal biases regarding different New York districts and age groups. I tried to maintain an open mind and analyze the data from all angles, regardless of my personal views, and obtained some interesting results.
+
+
+
+
+
+
